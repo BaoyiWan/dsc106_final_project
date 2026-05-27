@@ -295,7 +295,10 @@ export function initTimeMachine(ctx) {
     const sparkEl = document.getElementById('hover-spark');
     const w = sparkEl.clientWidth || 340;
     const h = 90;
-    const m = { t: 8, r: 10, b: 18, l: 32 };
+    // Left margin sized for the widest possible tick label — e.g.
+    // "-10.0°C" or "100°F" both need ~46-50px of room before getting
+    // clipped by the SVG viewBox.
+    const m = { t: 8, r: 10, b: 18, l: 50 };
 
     const svg = d3.select(sparkEl).append('svg')
       .attr('viewBox', `0 0 ${w} ${h}`)
