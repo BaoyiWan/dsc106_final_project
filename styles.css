@@ -467,8 +467,11 @@ a:hover { border-bottom-color: var(--accent); }
 }
 
 /* ====== Time Machine scrollytelling ====== */
-.tm-scrolly-wrap {
+/* Bump max-width past the default 1200 — county hover targeting
+   needs horizontal room. Selector specificity matches `.container.wide`. */
+.container.wide.tm-scrolly-wrap {
   position: relative;
+  max-width: 1500px;
 }
 .tm-sticky-stage {
   position: sticky;
@@ -578,10 +581,16 @@ a:hover { border-bottom-color: var(--accent); }
   display: inline-block;
 }
 
-/* Compact map heights so the sticky shell fits in viewport (~700-900px laptops) */
+/* Map heights — scale with viewport height so the sticky card uses the
+   real vertical space available on tall screens. Texas is height-limited
+   by its shape, so vertical room is what actually makes each Texas
+   county bigger. Cap chosen so the sticky shell still fits 1080p. */
 .tm-shell .tm-map {
-  height: clamp(180px, 22vw, 260px) !important;
+  height: clamp(260px, 52vh, 720px) !important;
 }
+/* Slightly tighter inner padding so more space goes to the maps. */
+.tm-shell { padding: clamp(0.9rem, 1.6vw, 1.4rem); }
+.tm-map-wrap { padding: 0.6rem; }
 .tm-controls {
   display: flex;
   flex-direction: column;
