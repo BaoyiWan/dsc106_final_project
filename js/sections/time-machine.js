@@ -490,8 +490,13 @@ export function initTimeMachine(ctx) {
     update();
   }
 
-  // Initialize Scrollama if available
-  if (typeof scrollama !== 'undefined') {
+  // Initialize Scrollama if available AND we're on a viewport tall/wide
+  // enough for sticky scrollytelling to feel right. On mobile (≤ 720 px)
+  // we skip the scene-driven animation — sticky doesn't really work on
+  // tight screens — and let users drive the Time Machine manually via
+  // the slider + variable buttons.
+  const mobileViewport = window.innerWidth <= 720;
+  if (typeof scrollama !== 'undefined' && !mobileViewport) {
     const scroller = scrollama();
     scroller
       .setup({
@@ -506,8 +511,8 @@ export function initTimeMachine(ctx) {
 
     window.addEventListener('resize', () => scroller.resize());
   } else {
-    console.warn('[time-machine] scrollama not loaded — scenes disabled, free explore only');
-    // Fall back to scene 0 without scroll-driven changes
+    // Apply scene 0 so the caption shows the first beat ("January · The
+    // North is asleep"). Users then drive everything manually.
     applyScene(0);
   }
 
