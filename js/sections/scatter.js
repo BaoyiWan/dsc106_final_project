@@ -5,57 +5,152 @@
 // =========================================================
 import {
   STATES, STATE_COLORS, STATE_COLORS_DARK, STATE_CROP, MONTH_SHORT, MONTH_NAMES,
+  TempUnit,
   showTip, moveTip, hideTip
 } from '../utils.js';
 
-const MONTH_LETTER = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+// Indices at which the seasonal trajectory shows a direction arrow.
+// 4 arrows per state — one anchored in the middle of each of the four
+// seasons, so the chronological loop reads at a glance:
+//   Jan→Feb (winter)  ·  Apr→May (spring rise)
+//   Jul→Aug (summer post-peak)  ·  Oct→Nov (fall return)
+const ARROW_SEGMENT_INDICES = [0, 3, 6, 9];
 
-const CHARTS = [
-  {
-    id: 'scatter-lst',
+// One renderer drives the shared chart frame; the variable tabs swap
+// which climate dimension lives on the x-axis. Title / sub-line /
+// insight note are part of the per-variable metadata so the chrome
+// rewrites in sync with the plot.
+const VAR_META = {
+  LST_Day: {
     xKey: 'LST_Day',
-    xLabel: 'Land Surface Temp — Day (°C)',
-    xFmt: d => d3.format('.0f')(d) + '°',
+    get xLabel() { return `Land Surface Temp — Day (${TempUnit.unitLabel()})`; },
+    xFmt: d => TempUnit.formatAbs(d, 0),
+    title: 'LST Day Temperature vs Vegetation',
+    get subHtml() { return `Land Surface Temp — Day (<span class="unit-text">${TempUnit.unitLabel()}</span>) on x-axis · NDVI on y-axis`; },
+    noteHtml: `Texas runs hottest every month — yet Iowa's more moderate
+      daytime soil temperatures push NDVI the highest.
+      <strong>Pure heat doesn't decide greenness; it’s the timing of warmth for emergence and the avoidance of heat stress during peak and harvest.</strong>`,
   },
-  {
-    id: 'scatter-precip',
+  LST_Night: {
+    xKey: 'LST_Night',
+    get xLabel() { return `Land Surface Temp — Night (${TempUnit.unitLabel()})`; },
+    xFmt: d => TempUnit.formatAbs(d, 0),
+    title: 'LST Night Temperature vs Vegetation',
+    get subHtml() { return `Land Surface Temp — Night (<span class="unit-text">${TempUnit.unitLabel()}</span>) on x-axis · NDVI on y-axis`; },
+    noteHtml: `Day and Night LST track each other tightly across counties —
+      yet plot Night against NDVI and the cluster grows visibly
+      tighter. When nights are cool in state Iowa, crops spend less energy on respiration, so they stay green longer at a higher level then declines more slowly compared to that of day. 
+      When nights are warm in state Texas — even if days are perfectly hot for growth — crops mature too fast and peak at May, reach a lower maximum greenness, and are ready to harvest earlier.
+      <strong>Plants feel the night more than they feel the day.</strong>`,
+  },
+  Precipitation: {
     xKey: 'Precipitation',
     xLabel: 'Precipitation (mm)',
     xFmt: d => d3.format('.0f')(d),
     xMin: 0,
     xMax: 140,
     xTicks: [20, 40, 60, 80, 100, 120, 140],
+    title: 'Rainfall vs Vegetation',
+    subHtml: 'Precipitation (mm) on x-axis · NDVI on y-axis',
+    noteHtml: `Iowa never breaks 85 mm in any month — yet its peak NDVI
+      tops both Kansas and Texas, which each pour past 110 mm in
+      their wettest month and still never catch up.
+      <strong>Crop type, not water volume, sets the ceiling.</strong>`,
   },
-];
+};
 
 export function initScatter(ctx) {
   let filter = 'all';
+  let activeVar = 'LST_Day';
+  const elId = 'scatter-main';
 
-  const renderers = CHARTS.map(cfg => makeScatter(cfg, ctx));
+  const titleEl = document.getElementById('scatter-title');
+  const subEl   = document.getElementById('scatter-sub');
+  const noteEl  = document.getElementById('scatter-note');
 
-  // wire up filter buttons
+  function buildCfg(varKey) {
+    // Inherit via prototype so getters on VAR_META (xLabel, subHtml)
+    // remain live — spreading would freeze them into static values and
+    // the °C/°F toggle would stop updating the axis label.
+    const cfg = Object.create(VAR_META[varKey]);
+    cfg.id = elId;
+    return cfg;
+  }
+
+  function syncChrome() {
+    const m = VAR_META[activeVar];
+    if (titleEl) titleEl.textContent = m.title;
+    if (subEl)   subEl.innerHTML     = m.subHtml;
+    if (noteEl)  noteEl.innerHTML    = m.noteHtml;
+  }
+
+  syncChrome();
+  // makeScatter calls rebuild() internally on construction with the
+  // default filter 'all' — matches our initial state, so no extra
+  // rebuild call needed here.
+  let renderer = makeScatter(buildCfg(activeVar), ctx);
+
+  // Variable tabs — swap which climate dimension is on the x-axis.
+  // We rebuild the renderer rather than mutate cfg in place because
+  // cfg is captured in makeScatter's closure; recreation is the
+  // cleanest way to flip all axis-dependent state at once.
+  //
+  // Fade-swap timing: the figure dims for ~220ms (matches the CSS
+  // transition), then chrome text + chart are recreated, then a frame
+  // later the class is removed so the new content fades back in.
+  const figureEl = document.querySelector('.scatter-card-single');
+  const FADE_MS = 220;
+
+  document.querySelectorAll('#scatter-var-toggle .scatter-var-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.var;
+      if (v === activeVar) return;
+      document.querySelectorAll('#scatter-var-toggle .scatter-var-btn')
+        .forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      figureEl.classList.add('var-switching');
+      setTimeout(() => {
+        activeVar = v;
+        syncChrome();
+        renderer = makeScatter(buildCfg(activeVar), ctx);
+        renderer.rebuild(filter);
+        // Next frame so the browser registers the new DOM before we
+        // pull the fade-out class — otherwise the fade-in is skipped.
+        requestAnimationFrame(() => figureEl.classList.remove('var-switching'));
+      }, FADE_MS);
+    });
+  });
+
+  // State filter — preserved across variable switches via the
+  // closed-over `filter` variable.
   document.querySelectorAll('#scatter-filter .filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('#scatter-filter .filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       filter = btn.dataset.state;
-      // Rebuild so axes re-zoom to the new filter's data range — when
-      // a single state is selected, the x-axis tightens to just that
-      // state's range, giving each dot far more pixel space.
-      renderers.forEach(r => r.rebuild(filter));
+      renderer.rebuild(filter);
     });
   });
 
   let resizeId;
   window.addEventListener('resize', () => {
     clearTimeout(resizeId);
-    resizeId = setTimeout(() => renderers.forEach(r => r.rebuild()), 150);
+    resizeId = setTimeout(() => renderer.rebuild(filter), 150);
+  });
+
+  // Rebuild on temperature-unit toggle so the LST chart's axis and
+  // tooltips switch to the new unit. Also re-syncs the title sub-line
+  // so the (°C)/(°F) suffix matches the current unit.
+  document.addEventListener('tempunitchange', () => {
+    syncChrome();
+    renderer.rebuild(filter);
   });
 }
 
 function makeScatter(cfg, ctx) {
   const el = document.getElementById(cfg.id);
-  let svg, gCloud, gTraj, gLink, gTruth, gDots, gAnnot, gAxes, x, y, m;
+  let svg, gCloud, gTraj, gArrows, gLink, gTruth, gDots, gAnnot, gAxes, x, y, m;
   let currentFilter = 'all';
 
   function rebuild(filter = currentFilter) {
@@ -91,8 +186,13 @@ function makeScatter(cfg, ctx) {
       .domain(xExtent)
       .range([m.l, w - m.r]);
     if (cfg.xTicks === undefined) x.nice();
+    // Fixed NDVI domain — locked to [0, 0.9] across every state filter
+    // and every variable tab. NDVI's zero is semantically meaningful
+    // (bare soil / no vegetation), and a stable y-range makes
+    // cross-state and cross-variable comparisons honest: Texas's lower
+    // ceiling vs Iowa's reads as real, not as the axis rescaling.
     y = d3.scaleLinear()
-      .domain([Math.max(0, d3.min(yVals)), Math.min(1, d3.max(yVals))]).nice()
+      .domain([0, 0.9])
       .range([h - m.b, m.t]);
 
     // grid
@@ -150,11 +250,12 @@ function makeScatter(cfg, ctx) {
         .text(r.label);
     });
 
-    gCloud = svg.append('g').attr('class', 'cloud');
-    gTraj  = svg.append('g').attr('class', 'traj');
-    gLink  = svg.append('g').attr('class', 'link');
-    gTruth = svg.append('g').attr('class', 'truth');   // small dots at exact (x,y)
-    gDots  = svg.append('g').attr('class', 'dots');     // big labelled bubbles (dodged)
+    gCloud  = svg.append('g').attr('class', 'cloud');
+    gTraj   = svg.append('g').attr('class', 'traj');
+    gArrows = svg.append('g').attr('class', 'traj-arrows');  // direction markers
+    gLink   = svg.append('g').attr('class', 'link');
+    gTruth  = svg.append('g').attr('class', 'truth');   // small dots at exact (x,y)
+    gDots   = svg.append('g').attr('class', 'dots');     // big labelled bubbles
 
     update(currentFilter);
   }
@@ -199,10 +300,15 @@ function makeScatter(cfg, ctx) {
       return { state: s, points: arr };
     });
 
+    // Linear segments — keeps the trajectory honest (each segment is the
+    // straight monthly transition between two real data points) AND
+    // guarantees the direction arrows we draw at segment midpoints sit
+    // exactly on the line. Catmull-Rom smoothing made arrows float off
+    // the curve in tightly bent regions like Iowa's July inflection.
     const lineGen = d3.line()
       .x(d => x(d[cfg.xKey]))
       .y(d => y(d.NDVI))
-      .curve(d3.curveCatmullRom.alpha(0.5));
+      .curve(d3.curveLinear);
 
     gTraj.selectAll('path.traj-line')
       .data(trajData, d => d.state)
@@ -211,18 +317,45 @@ function makeScatter(cfg, ctx) {
           .attr('class', 'traj-line')
           .attr('fill', 'none')
           .attr('stroke', d => STATE_COLORS[d.state])
-          .attr('stroke-width', 1.6)
+          .attr('stroke-width', 1.2)              // thinner — softer skeleton
           .attr('stroke-opacity', 0)
           .attr('stroke-linecap', 'round')
           .attr('stroke-linejoin', 'round')
           .attr('d', d => lineGen(d.points))
-          .call(en => en.transition().duration(450).attr('stroke-opacity', 0.55)),
+          .call(en => en.transition().duration(450).attr('stroke-opacity', 0.35)),
         update => update.transition().duration(380)
           .attr('stroke', d => STATE_COLORS[d.state])
           .attr('d', d => lineGen(d.points))
-          .attr('stroke-opacity', 0.55),
+          .attr('stroke-opacity', 0.35),
         exit => exit.transition().duration(200).attr('stroke-opacity', 0).remove()
       );
+
+    // ---- Direction arrows along trajectory ----
+    // Small filled triangles pointing FROM the earlier month TO the next,
+    // placed midway between selected month pairs. Makes the seasonal
+    // clockwise / counter-clockwise direction unambiguous (per TA feedback).
+    gArrows.selectAll('*').remove();
+    trajData.forEach(t => {
+      const pts = t.points;
+      ARROW_SEGMENT_INDICES.forEach(i => {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        const ax = x(a[cfg.xKey]), ay = y(a.NDVI);
+        const bx = x(b[cfg.xKey]), by = y(b.NDVI);
+        if (!Number.isFinite(ax) || !Number.isFinite(bx)) return;
+        const mx = (ax + bx) / 2;
+        const my = (ay + by) / 2;
+        const angle = Math.atan2(by - ay, bx - ax) * 180 / Math.PI;
+
+        gArrows.append('path')
+          .attr('class', 'traj-arrow')
+          .attr('d', 'M -3.5,-2.5 L 3,0 L -3.5,2.5 Z')  // smaller triangle
+          .attr('transform', `translate(${mx}, ${my}) rotate(${angle})`)
+          .attr('fill', STATE_COLORS_DARK[t.state])
+          .attr('fill-opacity', 0)
+          .call(sel => sel.transition().duration(450).attr('fill-opacity', 0.85));
+      });
+    });
 
     // ---- Foreground: state-level dots placed at EXACT (x, y) ----
     // No dodging, no displacement, no leader lines. Each labelled bubble
@@ -270,10 +403,13 @@ function makeScatter(cfg, ctx) {
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'central')
       .attr('font-family', 'JetBrains Mono, monospace')
-      .attr('font-size', 9.5).attr('font-weight', 700)
+      // Two-digit months (10, 11, 12) need a slightly smaller size
+      // to stay legibly inside the 8 px-radius dot.
+      .attr('font-size', d => d.month >= 10 ? 8 : 9.5)
+      .attr('font-weight', 700)
       .attr('fill', 'white')
       .attr('pointer-events', 'none')
-      .text(d => MONTH_LETTER[d.month - 1]);
+      .text(d => d.month);
 
     ent.attr('transform', d => `translate(${x(d[cfg.xKey])}, ${y(d.NDVI)})`);
 
