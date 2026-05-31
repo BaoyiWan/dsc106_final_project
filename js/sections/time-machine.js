@@ -5,17 +5,21 @@
 import {
   STATES, STATE_FP, FP_TO_STATE, STATE_COLORS_DARK, STATE_CROP,
   VARIABLES, MONTH_NAMES, MONTH_SHORT,
-  colorScaleFor, globalExtent, adaptiveStroke,
+  colorScaleFor, globalExtent, adaptiveStroke, TempUnit,
   showTip, moveTip, hideTip
 } from '../utils.js';
 
 // ---------- Scrollytelling scenes ----------
+// Scene bodies are rendered as HTML so absolute temperatures can be wrapped
+// in <span class="temp" data-c="…"> — the TempUnit toggle then updates them
+// in place when the user switches °C ↔ °F. Temperature DIFFERENCES use
+// <span class="temp-delta" data-c="…"> (no +32 offset on conversion).
 const SCENES = [
   {
     month: 1, varKey: 'NDVI',
     eyebrow: 'January · Vegetation',
-    title: 'The world is asleep.',
-    body: 'In winter, the land is dormant across all three states. NDVI hovers near zero — there is nothing growing to see. But how each state begins its year already hints at the story to come.',
+    title: 'The North is asleep.',
+    body: `In January, Iowa's vegetation index is near zero (0.08) — the corn fields are bare and frozen. Kansas stirs faintly at 0.23, while Texas already shows 0.34 in its evergreen southeast. Winter is one season nationwide on paper; on satellite it is three different states.`,
   },
   {
     month: 3, varKey: 'LST_Day',
@@ -27,13 +31,13 @@ const SCENES = [
     month: 4, varKey: 'NDVI', focus: 'Texas',
     eyebrow: 'April · Vegetation',
     title: 'Eastern Texas peaks first.',
-    body: 'Long before Iowa\'s corn has sprouted, eastern Texas counties already hit NDVI 0.79 — rainforest-level greenness. The very same state\'s western counties sit at just 0.15. A 0.64 gap inside a single state foreshadows the bigger lesson: state averages are fiction.',
+    body: `Long before Iowa's corn has sprouted, eastern Texas counties already hit NDVI 0.79 — rainforest-level greenness. The very same state's western counties sit at just 0.15. A 0.64 gap inside a single state foreshadows the bigger lesson: state averages are fiction.`,
   },
   {
     month: 7, varKey: 'NDVI', focus: 'Iowa',
     eyebrow: 'July · Vegetation',
     title: 'The Iowa corn explosion.',
-    body: 'July is corn\'s moment. Most Iowa counties cross NDVI 0.85 — rainforest-level greenness — and even the lowest county still sits at 0.73. This is the Corn Belt\'s reputation for uniformity earned in real numbers.',
+    body: `July is corn's moment. Iowa's average county reaches NDVI 0.84 — rainforest-level greenness — and even the lowest county sits at 0.73. This is the Corn Belt's reputation for uniformity earned in real numbers.`,
   },
   {
     month: 8, varKey: 'LST_Day', focus: 'Texas',
@@ -51,7 +55,7 @@ const SCENES = [
     month: 7, varKey: 'NDVI', free: true,
     eyebrow: 'Your turn',
     title: 'Drive the time machine yourself.',
-    body: 'Drag the month slider, switch variables, press play, hover any of the 458 counties to see its entire 12-month story below. The map will only update from the controls now — the story is yours.',
+    body: `Drag the month slider, switch variables, press play, hover any of the 458 counties to see its entire 12-month story below. The map will only update from the controls now — the story is yours.`,
   },
 ];
 
@@ -291,7 +295,10 @@ export function initTimeMachine(ctx) {
     const sparkEl = document.getElementById('hover-spark');
     const w = sparkEl.clientWidth || 340;
     const h = 90;
-    const m = { t: 8, r: 10, b: 18, l: 32 };
+    // Left margin sized for the widest possible tick label — e.g.
+    // "-10.0°C" or "100°F" both need ~46-50px of room before getting
+    // clipped by the SVG viewBox.
+    const m = { t: 8, r: 10, b: 18, l: 50 };
 
     const svg = d3.select(sparkEl).append('svg')
       .attr('viewBox', `0 0 ${w} ${h}`)
@@ -393,6 +400,26 @@ export function initTimeMachine(ctx) {
     });
   });
 
+  // °C / °F unit toggle — wires every .unit-btn on the page (the master
+  // selector in Setup AND the in-context one inside Time Machine). All
+  // toggles share one source of truth: TempUnit.current.
+  document.querySelectorAll('.unit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      TempUnit.set(btn.dataset.unit);
+    });
+  });
+
+  // Whenever the unit changes (from ANY toggle on the page), sync every
+  // .unit-btn's visual state and re-render Time Machine's legend/tooltips.
+  document.addEventListener('tempunitchange', () => {
+    document.querySelectorAll('.unit-btn').forEach(b => {
+      const isActive = b.dataset.unit === TempUnit.current;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-pressed', String(isActive));
+    });
+    update();
+  });
+
   document.addEventListener('mousemove', e => {
     if (document.getElementById('tooltip').classList.contains('visible')) moveTip(e);
   });
@@ -428,13 +455,24 @@ export function initTimeMachine(ctx) {
     monthInput.value = month;
     varBtns.forEach(b => b.classList.toggle('active', b.dataset.var === varKey));
 
-    // Caption fade-swap
+    // Caption fade-swap. Body is HTML (so .temp spans render); set via
+    // innerHTML, then the spans pick up the current unit via the
+    // initial render path.
     captionEl.classList.add('swap');
     setTimeout(() => {
       capCounter.textContent = `Scene ${idx + 1} of ${SCENES.length}`;
       capEyebrow.textContent = scene.eyebrow;
       capTitle.textContent   = scene.title;
-      capBody.textContent    = scene.body;
+      capBody.innerHTML      = scene.body;
+      // After body is injected, normalise any .temp / .temp-delta spans
+      // that were rendered with hard-coded °C text to the current unit.
+      capBody.querySelectorAll('.temp[data-c]').forEach(el => {
+        const decimals = el.dataset.decimals !== undefined ? +el.dataset.decimals : undefined;
+        el.textContent = TempUnit.formatAbs(+el.dataset.c, decimals);
+      });
+      capBody.querySelectorAll('.temp-delta[data-c]').forEach(el => {
+        el.textContent = TempUnit.formatDelta(+el.dataset.c);
+      });
       captionEl.classList.remove('swap');
     }, 180);
 

@@ -6,6 +6,7 @@
 // =========================================================
 import {
   STATES, STATE_COLORS, STATE_COLORS_DARK, STATE_CROP, MONTH_SHORT, MONTH_NAMES,
+  TempUnit,
   showTip, moveTip, hideTip
 } from '../utils.js';
 
@@ -118,7 +119,7 @@ export function initRadial(ctx) {
       .attr('font-size', 10)
       .attr('letter-spacing', '0.12em')
       .attr('fill', '#A29B85')
-      .text('YEAR · 2024');
+      .text('YEAR · 2023');
 
     // ---- Draw each state's curve (fills + lines first) ----
     const lineGen = d3.lineRadial()
@@ -168,26 +169,61 @@ export function initRadial(ctx) {
       .attr('fill', '#15191F')
       .attr('stroke', d => d.color).attr('stroke-width', 1.6);
 
-    // ---- Crop-peak labels (placed outside outer ring so they don't
-    //      collide with curves or month labels) ----
-    STATES.forEach(s => {
+    // ---- Crop-peak labels ----
+    //
+    // Placed well outside the month label ring (outerR + 50) so they
+    // don't crash into "Jan/Feb/.../Dec". For two states whose peaks
+    // share the same month (Iowa Corn & Kansas Wheat both peak in July
+    // this year), the labels spread ANGULARLY around the month's spoke
+    // rather than stack radially — this keeps both at the same nice
+    // distance from the chart edge while preventing text overlap.
+    const peakEntries = STATES.map(s => {
       const arr = ctx.index.stateByName.get(s);
-      const color = STATE_COLORS[s];
       const peak = arr.reduce((acc, d) => (d.NDVI > acc.NDVI ? d : acc), arr[0]);
-      const a = angle(peak.month);
-      // place label just outside the outer month-label ring, biased so
-      // labels for different peak months don't stack
-      const labelR = outerR + 56;
-      const lx = labelR * Math.sin(a);
-      const ly = -labelR * Math.cos(a);
-      g.append('text')
-        .attr('x', lx).attr('y', ly)
-        .attr('text-anchor', 'middle')
-        .attr('dominant-baseline', 'middle')
-        .attr('font-family', 'Fraunces, Georgia, serif')
-        .attr('font-size', 13).attr('font-weight', 600).attr('font-style', 'italic')
-        .attr('fill', color)
-        .text(`${STATE_CROP[s]} peak · ${MONTH_SHORT[peak.month - 1]}`);
+      return { state: s, color: STATE_COLORS[s], peak };
+    });
+
+    const peakGroups = d3.group(peakEntries, p => p.peak.month);
+    const PEAK_LABEL_R = outerR + 50;          // 28px past the month-label ring
+    const PEAK_ANGULAR_SPREAD = 0.18;          // radians, for same-month splits
+
+    peakGroups.forEach((group, month) => {
+      // Within a same-month group, sort ascending by NDVI so the
+      // smaller-peak label sits inner (closer to the chart) and the
+      // larger-peak label sits outer (further from centre).
+      group.sort((a, b) => a.peak.NDVI - b.peak.NDVI);
+
+      const baseAngle = angle(month);
+      const n = group.length;
+
+      group.forEach((p, i) => {
+        // Single-state month → label sits dead-on the month's spoke.
+        // 2-state month → ±spread; 3-state → ±2×spread/2 + middle entry.
+        let aOffset = 0;
+        if (n === 2)      aOffset = (i === 0 ? -PEAK_ANGULAR_SPREAD : PEAK_ANGULAR_SPREAD);
+        else if (n === 3) aOffset = (i - 1) * PEAK_ANGULAR_SPREAD * 1.1;
+
+        const a = baseAngle + aOffset;
+        const lx = PEAK_LABEL_R * Math.sin(a);
+        const ly = -PEAK_LABEL_R * Math.cos(a);
+
+        g.append('text')
+          .attr('x', lx).attr('y', ly)
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'middle')
+          .attr('font-family', 'Fraunces, Georgia, serif')
+          .attr('font-size', 12.5)
+          .attr('font-weight', 600)
+          .attr('font-style', 'italic')
+          .attr('letter-spacing', '0.005em')
+          .attr('fill', p.color)
+          // Subtle dark halo so the label reads cleanly even when it
+          // brushes near a curve or month tick.
+          .attr('stroke', 'rgba(15, 19, 25, 0.55)')
+          .attr('stroke-width', 3.5)
+          .attr('paint-order', 'stroke')
+          .text(`${STATE_CROP[p.state]} peak · ${MONTH_SHORT[month - 1]}`);
+      });
     });
 
     // ---- Delaunay hover surface ----
@@ -219,7 +255,7 @@ export function initRadial(ctx) {
           <div class="tt-title" style="color:${d.color}">${d.state} · ${STATE_CROP[d.state]}</div>
           <div class="tt-row"><span class="lbl">Month</span><span>${MONTH_NAMES[d.month - 1]}</span></div>
           <div class="tt-row"><span class="lbl">NDVI</span><span>${d.NDVI.toFixed(2)}</span></div>
-          <div class="tt-row"><span class="lbl">LST Day</span><span>${d.LST_Day.toFixed(1)}°C</span></div>
+          <div class="tt-row"><span class="lbl">LST Day</span><span>${TempUnit.formatAbs(d.LST_Day, 1)}</span></div>
           <div class="tt-row"><span class="lbl">Precip</span><span>${d.Precipitation.toFixed(0)} mm</span></div>
         `, event);
       })
